@@ -23,7 +23,11 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.models.deepseek_v4 import DeepseekV4DecoderLayer, DeepseekV4ForCausalLM
+from sglang.srt.models.deepseek_v4 import (
+    _FP8_WO_A_GEMM,
+    DeepseekV4DecoderLayer,
+    DeepseekV4ForCausalLM,
+)
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import add_prefix
 
@@ -211,6 +215,10 @@ class DeepseekV4ForCausalLMNextN(DeepseekV4ForCausalLM):
 
     def post_load_weights(self, is_nextn=False, weight_names=None):
         super().post_load_weights(is_nextn=True, weight_names=weight_names)
+
+    def post_process_weights(self):
+        if _FP8_WO_A_GEMM:
+            self._setup_fp8_wo_a_scales(is_nextn=True)
 
 
 EntryClass = [DeepseekV4ForCausalLMNextN]

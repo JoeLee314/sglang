@@ -297,7 +297,6 @@ class MQALayer(nn.Module):
             assert hasattr(
                 self.wo_a, "weight_scale_inv"
             ), "FP8 quant_config must create weight_scale_inv"
-            self.wo_a.weight_scale_inv.format_ue8m0 = True
         self.wo_b = RowParallelLinear(
             self.n_groups * self.o_lora_rank,
             self.hidden_size,
@@ -593,7 +592,7 @@ class MQALayer(nn.Module):
                 (o_fp8.view(T, G, D), o_s.view(T, G, -1)),
                 (self.wo_a.weight.view(G, R, D), self.wo_a.weight_scale_inv.data),
                 output,
-                recipe=(1, 1, 128),
+                recipe=self._wo_a_recipe,
             )
             o = output
         else:
@@ -1105,19 +1104,27 @@ class DeepseekV4ForCausalLM(nn.Module):
             R = attn.o_lora_rank
             D = attn.wo_a.weight.shape[1]
 
-            raw_scale = attn.wo_a.weight_scale_inv.data.view(G, R // 128, D // 128)
+            is_ue8m0 = getattr(attn.wo_a.weight_scale_inv, "format_ue8m0", False)
+            mn_block = 1 if is_ue8m0 else 128
+            recipe = (1, mn_block, 128)
+
+            raw_scale = attn.wo_a.weight_scale_inv.data.view(G, R // mn_block, D // 128)
             attn.wo_a.weight_scale_inv.data = transform_sf_into_required_layout(
                 raw_scale,
                 mn=R,
                 k=D,
-                recipe=(1, 128, 128),
+                recipe=recipe,
                 num_groups=G,
                 is_sfa=False,
             )
+            attn._wo_a_recipe = recipe
+
+    def post_process_weights(self):
+        """Called after Fp8Config.process_weights_after_loading."""
+        if _FP8_WO_A_GEMM:
+            self._setup_fp8_wo_a_scales(is_nextn=False)
 
     def post_load_weights(self, is_nextn=False, weight_names=None):
-        if _FP8_WO_A_GEMM:
-            self._setup_fp8_wo_a_scales(is_nextn)
 
         if is_nextn:
             return
